@@ -232,4 +232,39 @@ class FeedProvider extends ChangeNotifier {
       return <ReplyModel>[];
     }
   }
+
+  Future<bool> updateEntry(String id, {String? content, String? emotion, DateTime? diaryDate}) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/entries/$id');
+      final body = <String, dynamic>{};
+      if (content != null) body['content'] = content;
+      if (emotion != null) body['emotion'] = emotion;
+      if (diaryDate != null) body['diaryDate'] = diaryDate.toIso8601String();
+      final resp = await http.put(uri, headers: _authHeaders(), body: json.encode(body));
+      if (resp.statusCode == 200) {
+        final map = json.decode(resp.body) as Map<String, dynamic>;
+        final updated = EntryModel.fromMap(map);
+        final idx = _entries.indexWhere((e) => e.id == id);
+        if (idx != -1) {
+          _entries[idx] = updated;
+          notifyListeners();
+        }
+        return true;
+      }
+      return false;
+    } catch (_) { return false; }
+  }
+
+  Future<bool> deleteEntry(String id) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/entries/$id');
+      final resp = await http.delete(uri, headers: _authHeaders());
+      if (resp.statusCode == 200) {
+        _entries.removeWhere((e) => e.id == id);
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } catch (_) { return false; }
+  }
 }

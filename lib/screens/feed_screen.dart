@@ -237,7 +237,6 @@ class _FeedList extends StatelessWidget {
 
     void showOverlayPicker(Offset globalPos) {
       final overlay = Overlay.of(context);
-      if (overlay == null) return;
       late OverlayEntry entry;
       entry = OverlayEntry(builder: (ctx) {
         final size = MediaQuery.of(ctx).size;
@@ -367,31 +366,7 @@ class _EntryCardState extends State<_EntryCard> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              TextButton(
-                onPressed: e.authorId == null ? null : () async {
-                  final feed = context.read<FeedProvider>();
-                  if (feed.userId != null && e.authorId == feed.userId) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You can't follow yourself")));
-                    return;
-                  }
-                  final ok = await feed.followUser(e.authorId!);
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Following anon user' : 'Failed to follow')));
-                },
-                child: const Text('Follow'),
-              ),
-              const SizedBox(width: 4),
-              OutlinedButton(
-                onPressed: e.authorId == null ? null : () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ChatScreen(peerId: e.authorId!, title: 'Chat with ${e.authorId!.substring(0,6)}'),
-                    ),
-                  );
-                },
-                child: const Text('Message'),
-              )
+              _OwnerOrActions(entry: e),
             ],
           ),
           const SizedBox(height: 8),
@@ -435,6 +410,138 @@ class _EntryCardState extends State<_EntryCard> {
   }
 }
 
+class _OwnerOrActions extends StatelessWidget {
+  final EntryModel entry;
+  const _OwnerOrActions({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final feed = context.watch<FeedProvider>();
+    final isOwner = entry.authorId != null && entry.authorId == feed.userId;
+    if (isOwner) {
+      return Row(children: [
+        TextButton(
+          onPressed: () => _showEditDialog(context, entry),
+          child: const Text('Edit'),
+        ),
+        const SizedBox(width: 4),
+        TextButton(
+          onPressed: () async {
+            final ok = await _confirmDelete(context);
+            if (!ok) return;
+            final success = await context.read<FeedProvider>().deleteEntry(entry.id);
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(success ? 'Deleted' : 'Delete failed')));
+          },
+          child: const Text('Delete'),
+        ),
+      ]);
+    }
+    return Row(children: [
+      TextButton(
+        onPressed: entry.authorId == null ? null : () async {
+          final ok = await context.read<FeedProvider>().followUser(entry.authorId!);
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Following anon user' : 'Failed to follow')));
+        },
+        child: const Text('Follow'),
+      ),
+      const SizedBox(width: 4),
+      OutlinedButton(
+        onPressed: entry.authorId == null ? null : () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ChatScreen(peerId: entry.authorId!, title: 'Chat with ${entry.authorId!.substring(0,6)}'),
+            ),
+          );
+        },
+        child: const Text('Message'),
+      )
+    ]);
+  }
+
+  Future<bool> _confirmDelete(BuildContext context) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Delete entry?'),
+            content: const Text('This action cannot be undone.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+            ],
+          ),
+        ) ?? false;
+  }
+}
+
+void _showEditDialog(BuildContext context, EntryModel entry) {
+  final controller = TextEditingController(text: entry.content);
+  String? emotion = entry.emotion;
+  DateTime? diaryDate = entry.diaryDate;
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: const Color(0xFF0E0E12),
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) {
+      return Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+          left: 16,
+          right: 16,
+          top: 16,
+        ),
+        child: StatefulBuilder(builder: (context, setState) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('Edit entry', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: controller,
+                maxLines: 6,
+                minLines: 3,
+                decoration: const InputDecoration(hintText: 'Update your text'),
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(child: Text(diaryDate == null ? 'No diary date' : 'Diary: ${diaryDate!.toLocal()}')),
+                TextButton.icon(
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final d = await showDatePicker(context: context, firstDate: DateTime(now.year - 50), lastDate: DateTime(now.year + 50), initialDate: diaryDate ?? now);
+                    if (d != null) {
+                      final t = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(diaryDate ?? now));
+                      setState(() { diaryDate = DateTime(d.year, d.month, d.day, t?.hour ?? 0, t?.minute ?? 0); });
+                    }
+                  },
+                  icon: const Icon(Icons.event),
+                  label: const Text('Pick date & time'),
+                )
+              ]),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.save),
+                label: const Text('Save'),
+                onPressed: () async {
+                  final text = controller.text.trim();
+                  if (text.isEmpty) return;
+                  final ok = await context.read<FeedProvider>().updateEntry(entry.id, content: text, emotion: emotion, diaryDate: diaryDate);
+                  if (!context.mounted) return;
+                  if (ok) Navigator.pop(ctx);
+                },
+              )
+            ],
+          );
+        }),
+      );
+    },
+  );
+}
 class _StarFieldPainter extends CustomPainter {
   final double progress;
   _StarFieldPainter({required this.progress});
