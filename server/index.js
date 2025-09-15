@@ -33,7 +33,7 @@ if (!MONGODB_URI) {
 
 app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'x-user-id'] }));
 app.use(helmet());
-app.use(express.json({ limit: '16kb' }));
+app.use(express.json({ limit: '1mb' }));
 app.use(morgan('dev'));
 
 // ----- DB & Models -----
@@ -49,12 +49,13 @@ mongoose
 
 const entrySchema = new mongoose.Schema(
   {
-    content: { type: String, required: true, trim: true, maxlength: 2000 },
+    content: { type: String, required: true, trim: true },
     hearts: { type: Number, default: 0 },
     repliesCount: { type: Number, default: 0 },
     authorId: { type: String, default: null, index: true },
     emotion: { type: String, default: null },
     imageUrl: { type: String, default: null },
+    diaryDate: { type: Date, default: null },
     reactionsCounts: {
       heart: { type: Number, default: 0 },
       happy: { type: Number, default: 0 },
@@ -82,6 +83,9 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String },
     provider: { type: String, enum: ['anonymous', 'email'], default: 'anonymous' },
     anonId: { type: String, unique: true, index: true },
+    avatarUrl: { type: String, default: null },
+    themeColor: { type: String, default: null },
+    fcmTokens: { type: [String], default: [] },
   },
   { timestamps: true }
 );
@@ -137,7 +141,6 @@ function validateEntryBody(body) {
   if (!body || typeof body.content !== 'string') return 'INVALID_BODY';
   var content = body.content.trim();
   if (content.length === 0) return 'EMPTY_CONTENT';
-  if (content.length > 2000) return 'CONTENT_TOO_LONG';
   return null;
 }
 
@@ -217,16 +220,75 @@ app.post('/api/entries', upload.single('image'), async (req, res) => {
     if (errCode) return res.status(400).json({ error: errCode });
     const content = body.content.trim();
     const emotion = (body.emotion || '').toString().trim() || null;
+    let diaryDate = null;
+    if (body.diaryDate) {
+      const d = new Date(body.diaryDate);
+      if (!isNaN(d.getTime())) diaryDate = d;
+    }
     let imageUrl = null;
     if (req.file) {
       imageUrl = `/uploads/${req.file.filename}`;
     } else if (body.imageUrl) {
       imageUrl = body.imageUrl;
     }
-    const entry = await Entry.create({ content: content, authorId: authorId || null, emotion: emotion, imageUrl: imageUrl });
-    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId, emotion: entry.emotion, imageUrl: entry.imageUrl });
+    const entry = await Entry.create({ content: content, authorId: authorId || null, emotion: emotion, imageUrl: imageUrl, diaryDate });
+    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId, emotion: entry.emotion, imageUrl: entry.imageUrl, diaryDate: entry.diaryDate });
   } catch (err) {
     console.error('POST /api/entries error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+// Update entry (owner only)
+app.put('/api/entries/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'INVALID_ID' });
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const entry = await Entry.findById(id);
+    if (!entry) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (entry.authorId !== me) return res.status(403).json({ error: 'FORBIDDEN' });
+
+    const body = req.body || {};
+    if (typeof body.content === 'string') {
+      const trimmed = body.content.trim();
+      if (!trimmed) return res.status(400).json({ error: 'EMPTY_CONTENT' });
+      entry.content = trimmed;
+    }
+    if (typeof body.emotion === 'string') {
+      const emo = body.emotion.trim();
+      entry.emotion = emo || null;
+    }
+    if (typeof body.diaryDate === 'string') {
+      const d = new Date(body.diaryDate);
+      entry.diaryDate = isNaN(d.getTime()) ? entry.diaryDate : d;
+    }
+    await entry.save();
+    return res.json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId, emotion: entry.emotion, imageUrl: entry.imageUrl, diaryDate: entry.diaryDate, reactionsCounts: entry.reactionsCounts });
+  } catch (err) {
+    console.error('PUT /api/entries/:id error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+// Delete entry (owner only)
+app.delete('/api/entries/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'INVALID_ID' });
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const entry = await Entry.findById(id);
+    if (!entry) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (entry.authorId !== me) return res.status(403).json({ error: 'FORBIDDEN' });
+
+    await Entry.deleteOne({ _id: id });
+    await Reaction.deleteMany({ entryId: id });
+    await Reply.deleteMany({ entryId: id });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('DELETE /api/entries/:id error:', err);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
@@ -273,7 +335,7 @@ app.get('/api/entries', async (req, res) => {
     // Random feed
     const sampled = await Entry.aggregate([
       { $sample: { size: limit } },
-      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1, authorId: 1 } },
+      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1, authorId: 1, diaryDate: 1 } },
     ]);
     return res.json({ mode: 'random', limit, items: sampled });
   } catch (err) {
@@ -415,6 +477,98 @@ app.get('/api/messages/:peerId', async (req, res) => {
     const items = await Message.find({ conversationKey: key }).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
     return res.json({ page, limit, items: items.reverse() });
   } catch (err) { console.error('GET /messages error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// Conversations for current user
+app.get('/api/messages', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const convs = await Message.aggregate([
+      { $match: { $or: [ { fromId: me }, { toId: me } ] } },
+      { $sort: { createdAt: -1 } },
+      { $group: {
+          _id: '$conversationKey',
+          lastMessage: { $first: '$content' },
+          lastAt: { $first: '$createdAt' },
+          fromId: { $first: '$fromId' },
+          toId: { $first: '$toId' },
+        }
+      },
+      { $project: {
+          conversationKey: '$_id',
+          _id: 0,
+          lastMessage: 1,
+          lastAt: 1,
+          peerId: { $cond: [ { $eq: ['$fromId', me] }, '$toId', '$fromId' ] }
+        }
+      },
+      { $sort: { lastAt: -1 } },
+      { $limit: 50 }
+    ]);
+    return res.json({ items: convs });
+  } catch (err) { console.error('GET /api/messages conv error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// ---- Profile APIs (private by x-user-id) ----
+app.get('/api/profile/me', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const user = await User.findOne({ anonId: me }).lean();
+    return res.json({
+      anonId: me,
+      avatarUrl: user && user.avatarUrl,
+      themeColor: user && user.themeColor,
+    });
+  } catch (err) { console.error('GET /profile/me error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.post('/api/profile/me', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const avatarUrl = req.body && req.body.avatarUrl ? String(req.body.avatarUrl) : null;
+    const themeColor = req.body && req.body.themeColor ? String(req.body.themeColor) : null;
+    const u = await User.findOneAndUpdate(
+      { anonId: me }, { $set: { avatarUrl, themeColor } }, { upsert: true, new: true }
+    );
+    return res.json({ ok: true, avatarUrl: u.avatarUrl, themeColor: u.themeColor });
+  } catch (err) { console.error('POST /profile/me error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// My entries
+app.get('/api/profile/my-entries', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const items = await Entry.find({ authorId: me }).sort({ createdAt: -1 }).limit(100).lean();
+    return res.json({ items });
+  } catch (err) { console.error('GET /profile/my-entries error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// My reactions (liked/bookmarked by reaction type heart)
+app.get('/api/profile/my-hearts', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const reacts = await Reaction.find({ userId: me, type: 'heart' }).sort({ createdAt: -1 }).limit(200).lean();
+    const ids = reacts.map(r => r.entryId);
+    const items = await Entry.find({ _id: { $in: ids } }).lean();
+    return res.json({ items });
+  } catch (err) { console.error('GET /profile/my-hearts error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// Save FCM token
+app.post('/api/notify/token', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const token = req.body && req.body.token ? String(req.body.token) : '';
+    if (!token) return res.status(400).json({ error: 'NO_TOKEN' });
+    await User.updateOne({ anonId: me }, { $addToSet: { fcmTokens: token } }, { upsert: true });
+    return res.json({ ok: true });
+  } catch (err) { console.error('POST /notify/token error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
 });
 
 // Create a reply (anonymous)

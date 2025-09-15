@@ -40,6 +40,10 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
       appBar: AppBar(
         title: const Text('AnonDiary'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            onPressed: () => Navigator.of(context).pushNamed('/profile'),
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.filter_list),
             onSelected: (m) {
@@ -82,6 +86,7 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
     final controller = TextEditingController();
     String? selectedEmotion;
     final emotions = <String>['joy','sad','angry','lonely','love','anxious','calm'];
+    DateTime? selectedDate;
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF0E0E12),
@@ -108,7 +113,7 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
                 maxLines: 5,
                 minLines: 3,
                 decoration: const InputDecoration(
-                  hintText: 'Write something... (max ~2000 chars)',
+                  hintText: 'Write something... (no limit)',
                   filled: true,
                 ),
               ),
@@ -128,13 +133,50 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
                 );
               }),
               const SizedBox(height: 12),
+              StatefulBuilder(builder: (context, setState) {
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Text(selectedDate == null
+                          ? 'No diary date selected'
+                          : 'Diary date: ${selectedDate!.toLocal()}'),
+                    ),
+                    TextButton.icon(
+                      onPressed: () async {
+                        final now = DateTime.now();
+                        final picked = await showDatePicker(
+                          context: context,
+                          firstDate: DateTime(now.year - 50),
+                          lastDate: DateTime(now.year + 50),
+                          initialDate: selectedDate ?? now,
+                        );
+                        if (picked != null) {
+                          final time = await showTimePicker(
+                            context: context,
+                            initialTime: TimeOfDay.fromDateTime(selectedDate ?? now),
+                          );
+                          setState(() {
+                            selectedDate = DateTime(
+                              picked.year, picked.month, picked.day,
+                              time?.hour ?? 0, time?.minute ?? 0,
+                            );
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.event),
+                      label: const Text('Pick date & time'),
+                    )
+                  ],
+                );
+              }),
+              const SizedBox(height: 12),
               ElevatedButton.icon(
                 icon: const Icon(Icons.send),
                 label: const Text('Post anonymously'),
                 onPressed: () async {
                   final text = controller.text.trim();
                   if (text.isEmpty) return;
-                  final ok = await context.read<FeedProvider>().createEntry(text, emotion: selectedEmotion);
+                  final ok = await context.read<FeedProvider>().createEntry(text, emotion: selectedEmotion, diaryDate: selectedDate);
                   if (ok && mounted) Navigator.of(ctx).pop();
                 },
               ),
@@ -191,21 +233,93 @@ class _FeedList extends StatelessWidget {
   Widget _reactionBar(BuildContext context, EntryModel e) {
     final feed = context.read<FeedProvider>();
     final Map<String, int> counts = e.reactionsCounts;
-    Widget item(String label, IconData icon, String type) {
-      final c = counts[type] ?? 0;
-      return Row(children: [
-        _ghostIconButton(context, icon, () => feed.reactToEntry(e.id, type)),
-        const SizedBox(width: 4),
-        Text('$c'),
-        const SizedBox(width: 8),
-      ]);
+    final int total = (counts['heart'] ?? 0) + (counts['happy'] ?? 0) + (counts['sad'] ?? 0) + (counts['angry'] ?? 0);
+
+    void showOverlayPicker(Offset globalPos) {
+      final overlay = Overlay.of(context);
+      if (overlay == null) return;
+      late OverlayEntry entry;
+      entry = OverlayEntry(builder: (ctx) {
+        final size = MediaQuery.of(ctx).size;
+        const margin = 12.0;
+        const itemSize = 44.0;
+        const gap = 8.0;
+        const horizontalPad = 16.0; // container horizontal padding total
+        // width = 4 items + 3 gaps + padding
+        const pillWidth = (itemSize * 4) + (gap * 3) + horizontalPad;
+        const pillHeight = 60.0;
+
+        double desiredTop = globalPos.dy - 72;
+        // Nếu không đủ chỗ phía trên, hiển thị phía dưới
+        if (desiredTop < margin) {
+          desiredTop = globalPos.dy + 16;
+        }
+        // Clamp theo chiều dọc
+        double top = desiredTop.clamp(margin, size.height - pillHeight - margin);
+
+        // Căn giữa quanh điểm nhấn nhưng không tràn trái/phải
+        double left = (globalPos.dx - pillWidth / 2).clamp(margin, size.width - pillWidth - margin);
+        return Stack(children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => entry.remove(),
+            ),
+          ),
+          Positioned(
+            left: left,
+            top: top,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15151B),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: Colors.white12),
+                  boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 12, offset: Offset(0, 6))],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _reactionPickerItem(context, Icons.favorite_border, () {
+                      entry.remove();
+                      feed.reactToEntry(e.id, 'heart');
+                    }),
+                    const SizedBox(width: gap),
+                    _reactionPickerItem(context, Icons.emoji_emotions_outlined, () {
+                      entry.remove();
+                      feed.reactToEntry(e.id, 'happy');
+                    }),
+                    const SizedBox(width: gap),
+                    _reactionPickerItem(context, Icons.mood_bad_outlined, () {
+                      entry.remove();
+                      feed.reactToEntry(e.id, 'sad');
+                    }),
+                    const SizedBox(width: gap),
+                    _reactionPickerItem(context, Icons.sentiment_very_dissatisfied_outlined, () {
+                      entry.remove();
+                      feed.reactToEntry(e.id, 'angry');
+                    }),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ]);
+      });
+      overlay.insert(entry);
     }
-    return Row(children: [
-      item('heart', Icons.favorite_border, 'heart'),
-      item('happy', Icons.emoji_emotions_outlined, 'happy'),
-      item('sad', Icons.mood_bad_outlined, 'sad'),
-      item('angry', Icons.sentiment_very_dissatisfied_outlined, 'angry'),
-    ]);
+
+    return GestureDetector(
+      onTap: () => feed.reactToEntry(e.id, 'heart'),
+      onLongPressStart: (d) => showOverlayPicker(d.globalPosition),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _ghostIconButton(context, Icons.favorite_border, () => feed.reactToEntry(e.id, 'heart')),
+        const SizedBox(width: 4),
+        Text('$total'),
+      ]),
+    );
   }
 
 }
@@ -304,12 +418,15 @@ class _EntryCardState extends State<_EntryCard> {
           const SizedBox(height: 12),
           Row(
             children: [
-              widget.buildReactionBar(),
+              Expanded(child: widget.buildReactionBar()),
               const SizedBox(width: 12),
               _ghostIconButton(context, Icons.reply, widget.onOpenReplies),
               Text('${e.repliesCount}'),
               const Spacer(),
-              Text(formatTime(e.createdAt), style: const TextStyle(color: Colors.grey)),
+              Text(
+                formatDateTime(e.diaryDate ?? e.createdAt),
+                style: const TextStyle(color: Colors.grey),
+              ),
             ],
           )
         ],
@@ -359,6 +476,24 @@ Widget _ghostIconButton(BuildContext context, IconData icon, VoidCallback onTap)
   );
 }
 
+Widget _reactionPickerItem(BuildContext context, IconData icon, VoidCallback onTap) {
+  return InkWell(
+    onTap: onTap,
+    customBorder: const CircleBorder(),
+    child: Container(
+      width: 44,
+      height: 44,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Icon(icon, size: 22),
+    ),
+  );
+}
+
 String formatTime(DateTime dt) {
   final now = DateTime.now();
   final diff = now.difference(dt);
@@ -366,4 +501,9 @@ String formatTime(DateTime dt) {
   if (diff.inMinutes < 60) return '${diff.inMinutes} min';
   if (diff.inHours < 24) return '${diff.inHours} h';
   return '${diff.inDays} d';
+}
+
+String formatDateTime(DateTime dt) {
+  String p(int n) => n.toString().padLeft(2, '0');
+  return '${p(dt.day)}/${p(dt.month)}/${dt.year} ${p(dt.hour)}:${p(dt.minute)}';
 }

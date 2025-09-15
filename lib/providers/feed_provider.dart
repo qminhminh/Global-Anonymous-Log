@@ -11,6 +11,7 @@ class EntryModel {
   final String? emotion;
   final String? imageUrl;
   final String? authorId;
+  final DateTime? diaryDate;
   Map<String, int> reactionsCounts;
 
   EntryModel({
@@ -22,6 +23,7 @@ class EntryModel {
     this.emotion,
     this.imageUrl,
     this.authorId,
+    this.diaryDate,
     Map<String, int>? reactionsCounts,
   }) : reactionsCounts = reactionsCounts ?? <String, int>{};
 
@@ -35,6 +37,7 @@ class EntryModel {
       emotion: map['emotion']?.toString(),
       imageUrl: map['imageUrl']?.toString(),
       authorId: map['authorId']?.toString(),
+      diaryDate: DateTime.tryParse(map['diaryDate']?.toString() ?? ''),
       reactionsCounts: (map['reactionsCounts'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v is int ? v : int.tryParse('$v') ?? 0)) ?? <String, int>{},
     );
   }
@@ -136,13 +139,13 @@ class FeedProvider extends ChangeNotifier {
     } catch (_) { return false; }
   }
 
-  Future<bool> createEntry(String content, {String? emotion, String? imageUrl}) async {
+  Future<bool> createEntry(String content, {String? emotion, String? imageUrl, DateTime? diaryDate}) async {
     try {
       final uri = Uri.parse('$baseUrl/api/entries');
       final resp = await http.post(
         uri,
         headers: _authHeaders(),
-        body: json.encode({'content': content, 'emotion': emotion, 'imageUrl': imageUrl}),
+        body: json.encode({'content': content, 'emotion': emotion, 'imageUrl': imageUrl, 'diaryDate': diaryDate?.toIso8601String()}),
       );
       if (resp.statusCode == 201) {
         final map = json.decode(resp.body) as Map<String, dynamic>;

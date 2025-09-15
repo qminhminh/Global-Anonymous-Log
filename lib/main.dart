@@ -5,6 +5,7 @@ import 'providers/auth_provider.dart';
 import 'providers/feed_provider.dart';
 import 'screens/feed_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/profile_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -46,6 +47,9 @@ class MyApp extends StatelessWidget {
           cardColor: const Color(0xFF0A2430),
         ),
         home: const _RootGate(),
+        routes: {
+          '/profile': (_) => const ProfileScreen(),
+        },
       ),
     );
   }
