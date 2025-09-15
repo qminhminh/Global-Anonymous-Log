@@ -8,6 +8,10 @@ class EntryModel {
   int hearts;
   int repliesCount;
   final DateTime createdAt;
+  final String? emotion;
+  final String? imageUrl;
+  final String? authorId;
+  Map<String, int> reactionsCounts;
 
   EntryModel({
     required this.id,
@@ -15,7 +19,11 @@ class EntryModel {
     required this.hearts,
     required this.repliesCount,
     required this.createdAt,
-  });
+    this.emotion,
+    this.imageUrl,
+    this.authorId,
+    Map<String, int>? reactionsCounts,
+  }) : reactionsCounts = reactionsCounts ?? <String, int>{};
 
   factory EntryModel.fromMap(Map<String, dynamic> map) {
     return EntryModel(
@@ -24,6 +32,10 @@ class EntryModel {
       hearts: map['hearts'] is int ? map['hearts'] as int : int.tryParse('${map['hearts']}') ?? 0,
       repliesCount: map['repliesCount'] is int ? map['repliesCount'] as int : int.tryParse('${map['repliesCount']}') ?? 0,
       createdAt: DateTime.tryParse(map['createdAt']?.toString() ?? '') ?? DateTime.now(),
+      emotion: map['emotion']?.toString(),
+      imageUrl: map['imageUrl']?.toString(),
+      authorId: map['authorId']?.toString(),
+      reactionsCounts: (map['reactionsCounts'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v is int ? v : int.tryParse('$v') ?? 0)) ?? <String, int>{},
     );
   }
 }
@@ -108,13 +120,29 @@ class FeedProvider extends ChangeNotifier {
     return headers;
   }
 
-  Future<bool> createEntry(String content) async {
+  Future<bool> followUser(String targetId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/social/follow/$targetId');
+      final resp = await http.post(uri, headers: _authHeaders());
+      return resp.statusCode == 200;
+    } catch (_) { return false; }
+  }
+
+  Future<bool> unfollowUser(String targetId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/social/follow/$targetId');
+      final resp = await http.delete(uri, headers: _authHeaders());
+      return resp.statusCode == 200;
+    } catch (_) { return false; }
+  }
+
+  Future<bool> createEntry(String content, {String? emotion, String? imageUrl}) async {
     try {
       final uri = Uri.parse('$baseUrl/api/entries');
       final resp = await http.post(
         uri,
         headers: _authHeaders(),
-        body: json.encode({'content': content}),
+        body: json.encode({'content': content, 'emotion': emotion, 'imageUrl': imageUrl}),
       );
       if (resp.statusCode == 201) {
         final map = json.decode(resp.body) as Map<String, dynamic>;
@@ -131,18 +159,38 @@ class FeedProvider extends ChangeNotifier {
 
   Future<void> heartEntry(String id) async {
     try {
-      final uri = Uri.parse('$baseUrl/api/entries/$id/heart');
-      final resp = await http.post(uri);
+      final uri = Uri.parse('$baseUrl/api/entries/$id/react');
+      final resp = await http.post(
+        uri,
+        headers: _authHeaders(),
+        body: json.encode({ 'type': 'heart' }),
+      );
       if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        final counts = (data['counts'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v is int ? v : int.tryParse('$v') ?? 0));
         final idx = _entries.indexWhere((e) => e.id == id);
-        if (idx != -1) {
-          _entries[idx].hearts += 1;
-          notifyListeners();
-        }
+        if (idx != -1 && counts != null) { _entries[idx].reactionsCounts = counts; notifyListeners(); }
       }
     } catch (_) {
       // noop
     }
+  }
+
+  Future<void> reactToEntry(String id, String type) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/entries/$id/react');
+      final resp = await http.post(
+        uri,
+        headers: _authHeaders(),
+        body: json.encode({ 'type': type }),
+      );
+      if (resp.statusCode == 200) {
+        final data = json.decode(resp.body) as Map<String, dynamic>;
+        final counts = (data['counts'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v is int ? v : int.tryParse('$v') ?? 0));
+        final idx = _entries.indexWhere((e) => e.id == id);
+        if (idx != -1 && counts != null) { _entries[idx].reactionsCounts = counts; notifyListeners(); }
+      }
+    } catch (_) {}
   }
 
   Future<bool> createReply(String entryId, String content) async {

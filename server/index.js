@@ -6,6 +6,20 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const multer = require('multer');
+let admin = null;
+try {
+  admin = require('firebase-admin');
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    if (!admin.apps.length) {
+      if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+        const svc = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+        admin.initializeApp({ credential: admin.credential.cert(svc) });
+      } else {
+        admin.initializeApp({});
+      }
+    }
+  }
+} catch (_) {}
 
 // ----- Config -----
 const app = express();
@@ -41,6 +55,12 @@ const entrySchema = new mongoose.Schema(
     authorId: { type: String, default: null, index: true },
     emotion: { type: String, default: null },
     imageUrl: { type: String, default: null },
+    reactionsCounts: {
+      heart: { type: Number, default: 0 },
+      happy: { type: Number, default: 0 },
+      sad: { type: Number, default: 0 },
+      angry: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 );
@@ -66,6 +86,51 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 const User = mongoose.model('User', userSchema);
+
+const reactionSchema = new mongoose.Schema(
+  {
+    entryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Entry', index: true, required: true },
+    userId: { type: String, index: true, required: true },
+    type: { type: String, enum: ['heart', 'happy', 'sad', 'angry'], required: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+reactionSchema.index({ entryId: 1, userId: 1 }, { unique: true });
+const Reaction = mongoose.model('Reaction', reactionSchema);
+const ALLOWED_REACTIONS = ['heart', 'happy', 'sad', 'angry'];
+
+// Social: follow, friendship, messages
+const followSchema = new mongoose.Schema(
+  {
+    followerId: { type: String, required: true, index: true },
+    followingId: { type: String, required: true, index: true },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+followSchema.index({ followerId: 1, followingId: 1 }, { unique: true });
+const Follow = mongoose.model('Follow', followSchema);
+
+const friendRequestSchema = new mongoose.Schema(
+  {
+    fromId: { type: String, required: true, index: true },
+    toId: { type: String, required: true, index: true },
+    status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' },
+  },
+  { timestamps: true }
+);
+friendRequestSchema.index({ fromId: 1, toId: 1 }, { unique: true });
+const FriendRequest = mongoose.model('FriendRequest', friendRequestSchema);
+
+const messageSchema = new mongoose.Schema(
+  {
+    conversationKey: { type: String, index: true }, // sorted pair: userA|userB
+    fromId: { type: String, required: true, index: true },
+    toId: { type: String, required: true, index: true },
+    content: { type: String, required: true, maxlength: 2000 },
+  },
+  { timestamps: { createdAt: true, updatedAt: false } }
+);
+const Message = mongoose.model('Message', messageSchema);
 
 // ----- Validation helpers (Node 12 friendly) -----
 function validateEntryBody(body) {
@@ -183,10 +248,32 @@ app.get('/api/entries', async (req, res) => {
       return res.json({ mode, page, limit, items });
     }
 
+    if (mode === 'recommended') {
+      const items = await Entry.aggregate([
+        { $addFields: {
+            totalReactions: {
+              $add: [
+                { $ifNull: [ '$hearts', 0 ] },
+                { $ifNull: [ '$repliesCount', 0 ] },
+                { $ifNull: [ '$reactionsCounts.heart', 0 ] },
+                { $ifNull: [ '$reactionsCounts.happy', 0 ] },
+                { $ifNull: [ '$reactionsCounts.sad', 0 ] },
+                { $ifNull: [ '$reactionsCounts.angry', 0 ] },
+              ]
+            }
+        } },
+        { $sort: { totalReactions: -1, createdAt: -1 } },
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1 } },
+      ]);
+      return res.json({ mode, page, limit, items });
+    }
+
     // Random feed
     const sampled = await Entry.aggregate([
       { $sample: { size: limit } },
-      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1 } },
+      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1, authorId: 1 } },
     ]);
     return res.json({ mode: 'random', limit, items: sampled });
   } catch (err) {
@@ -198,15 +285,136 @@ app.get('/api/entries', async (req, res) => {
 // Heart an entry
 app.post('/api/entries/:id/heart', async (req, res) => {
   try {
+    // Backwards compatibility: map to unified reaction 'heart'
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'INVALID_ID' });
-    const updated = await Entry.findByIdAndUpdate(id, { $inc: { hearts: 1 } }, { new: true }).lean();
-    if (!updated) return res.status(404).json({ error: 'NOT_FOUND' });
-    return res.json({ id: updated._id, hearts: updated.hearts });
+    req.body = { type: 'heart' };
+    return reactHandler(req, res);
   } catch (err) {
     console.error('POST /api/entries/:id/heart error:', err);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
+});
+
+// React to an entry (one reaction per user per entry)
+async function reactHandler(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'INVALID_ID' });
+    const userId = (req.header('x-user-id') || '').toString().trim();
+    if (!userId) return res.status(401).json({ error: 'NO_USER' });
+    const type = (req.body && req.body.type ? String(req.body.type) : '').trim();
+    if (!ALLOWED_REACTIONS.includes(type)) return res.status(400).json({ error: 'INVALID_REACTION' });
+
+    const entry = await Entry.findById(id);
+    if (!entry) return res.status(404).json({ error: 'NOT_FOUND' });
+
+    let current = await Reaction.findOne({ entryId: id, userId }).lean();
+    if (!current) {
+      await Reaction.create({ entryId: id, userId, type });
+      entry.reactionsCounts[type] = (entry.reactionsCounts[type] || 0) + 1;
+      await entry.save();
+      return res.json({ ok: true, counts: entry.reactionsCounts, myReaction: type });
+    }
+    if (current.type === type) {
+      // idempotent: keep same reaction (do not toggle-off)
+      return res.json({ ok: true, counts: entry.reactionsCounts, myReaction: type });
+    }
+    // switch reaction
+    await Reaction.updateOne({ entryId: id, userId }, { $set: { type } });
+    if (entry.reactionsCounts[current.type] > 0) entry.reactionsCounts[current.type] -= 1;
+    entry.reactionsCounts[type] = (entry.reactionsCounts[type] || 0) + 1;
+    await entry.save();
+    return res.json({ ok: true, counts: entry.reactionsCounts, myReaction: type });
+  } catch (err) {
+    console.error('reactHandler error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+app.post('/api/entries/:id/react', reactHandler);
+
+// ---- Follow APIs ----
+app.post('/api/social/follow/:targetId', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    const target = req.params.targetId;
+    if (!me || !target || me === target) return res.status(400).json({ error: 'INVALID' });
+    await Follow.updateOne({ followerId: me, followingId: target }, { $setOnInsert: { followerId: me, followingId: target } }, { upsert: true });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /follow error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+app.delete('/api/social/follow/:targetId', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    const target = req.params.targetId;
+    await Follow.deleteOne({ followerId: me, followingId: target });
+    return res.json({ ok: true });
+  } catch (err) { console.error('DELETE /follow error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// ---- Friend request APIs ----
+app.post('/api/social/friends/request/:toId', async (req, res) => {
+  try {
+    const fromId = (req.header('x-user-id') || '').toString().trim();
+    const toId = req.params.toId;
+    if (!fromId || !toId || fromId === toId) return res.status(400).json({ error: 'INVALID' });
+    const fr = await FriendRequest.findOneAndUpdate({ fromId, toId }, { $setOnInsert: { fromId, toId, status: 'pending' } }, { upsert: true, new: true });
+    return res.json({ ok: true, requestId: fr._id, status: fr.status });
+  } catch (err) { console.error('POST /friends/request error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.post('/api/social/friends/respond/:requestId', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    const { requestId } = req.params;
+    const { action } = req.body || {};
+    const fr = await FriendRequest.findById(requestId);
+    if (!fr) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (fr.toId !== me) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (action === 'accept') {
+      fr.status = 'accepted';
+      await fr.save();
+    } else if (action === 'reject') {
+      fr.status = 'rejected';
+      await fr.save();
+    } else {
+      return res.status(400).json({ error: 'INVALID_ACTION' });
+    }
+    return res.json({ ok: true, status: fr.status });
+  } catch (err) { console.error('POST /friends/respond error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// ---- Messaging APIs ----
+function conversationKey(a, b) {
+  return [a, b].sort().join('|');
+}
+
+app.post('/api/messages/:toId', async (req, res) => {
+  try {
+    const fromId = (req.header('x-user-id') || '').toString().trim();
+    const toId = req.params.toId;
+    const content = (req.body && req.body.content ? String(req.body.content) : '').trim();
+    if (!fromId || !toId || !content) return res.status(400).json({ error: 'INVALID' });
+    const key = conversationKey(fromId, toId);
+    const msg = await Message.create({ conversationKey: key, fromId, toId, content });
+    return res.status(201).json({ id: msg._id, fromId, toId, content, createdAt: msg.createdAt });
+  } catch (err) { console.error('POST /messages error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.get('/api/messages/:peerId', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    const peer = req.params.peerId;
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10)));
+    const key = conversationKey(me, peer);
+    const items = await Message.find({ conversationKey: key }).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    return res.json({ page, limit, items: items.reverse() });
+  } catch (err) { console.error('GET /messages error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
 });
 
 // Create a reply (anonymous)
@@ -255,5 +463,15 @@ app.get('/api/entries/:id/replies', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
+
+// ---- Notification helper ----
+async function sendPush(toToken, title, body, data) {
+  if (!admin || !admin.apps || !admin.apps.length) return;
+  try {
+    await admin.messaging().send({ token: toToken, notification: { title, body }, data });
+  } catch (err) {
+    console.error('FCM send error:', err && err.message);
+  }
+}
 
 

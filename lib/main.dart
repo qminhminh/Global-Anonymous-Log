@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'providers/auth_provider.dart';
 import 'providers/feed_provider.dart';
 import 'screens/feed_screen.dart';
@@ -32,6 +33,7 @@ class MyApp extends StatelessWidget {
             seedColor: primaryAccent,
             brightness: Brightness.dark,
           ),
+          textTheme: GoogleFonts.interTextTheme(ThemeData.dark().textTheme).apply(bodyColor: Colors.white, displayColor: Colors.white),
           appBarTheme: AppBarTheme(
             backgroundColor: appBackground,
             foregroundColor: Colors.white,
