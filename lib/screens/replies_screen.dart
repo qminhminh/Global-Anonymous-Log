@@ -62,10 +62,16 @@ class _RepliesScreenState extends State<RepliesScreen> {
                         separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (context, index) {
                           final r = _replies[index];
-                          return ListTile(
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                            title: Text(r.content),
-                            subtitle: Text(_formatTime(r.createdAt)),
+                          return Align(
+                            alignment: Alignment.topCenter,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 720),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                                title: Text(r.content),
+                                subtitle: Text(_formatTime(r.createdAt)),
+                              ),
+                            ),
                           );
                         },
                       )),

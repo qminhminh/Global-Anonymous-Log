@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const multer = require('multer');
 
 // ----- Config -----
 const app = express();
@@ -38,6 +39,8 @@ const entrySchema = new mongoose.Schema(
     hearts: { type: Number, default: 0 },
     repliesCount: { type: Number, default: 0 },
     authorId: { type: String, default: null, index: true },
+    emotion: { type: String, default: null },
+    imageUrl: { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -53,6 +56,16 @@ const replySchema = new mongoose.Schema(
 
 const Entry = mongoose.model('Entry', entrySchema);
 const Reply = mongoose.model('Reply', replySchema);
+const userSchema = new mongoose.Schema(
+  {
+    email: { type: String, unique: true, sparse: true, index: true },
+    passwordHash: { type: String },
+    provider: { type: String, enum: ['anonymous', 'email'], default: 'anonymous' },
+    anonId: { type: String, unique: true, index: true },
+  },
+  { timestamps: true }
+);
+const User = mongoose.model('User', userSchema);
 
 // ----- Validation helpers (Node 12 friendly) -----
 function validateEntryBody(body) {
@@ -81,20 +94,72 @@ app.post('/api/auth/anonymous', (req, res) => {
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
+
+// Simplified email register/login (no JWT; returns userId)
+function normalizeEmail(s) {
+  return (s || '').toString().trim().toLowerCase();
+}
+
+const crypto = require('crypto');
+function hashPassword(pw) {
+  return crypto.createHash('sha256').update(pw).digest('hex');
+}
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body && req.body.email);
+    const password = (req.body && req.body.password) ? String(req.body.password) : '';
+    if (!email || !password || password.length < 6) return res.status(400).json({ error: 'INVALID_CREDENTIALS' });
+    const exists = await User.findOne({ email }).lean();
+    if (exists) return res.status(409).json({ error: 'EMAIL_EXISTS' });
+    const anonId = 'user_' + Math.random().toString(36).slice(2, 10);
+    const created = await User.create({ email, passwordHash: hashPassword(password), provider: 'email', anonId });
+    return res.status(201).json({ userId: created.anonId });
+  } catch (err) {
+    console.error('POST /api/auth/register error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body && req.body.email);
+    const password = (req.body && req.body.password) ? String(req.body.password) : '';
+    if (!email || !password) return res.status(400).json({ error: 'INVALID_CREDENTIALS' });
+    const u = await User.findOne({ email }).lean();
+    if (!u) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (u.passwordHash !== hashPassword(password)) return res.status(401).json({ error: 'WRONG_PASSWORD' });
+    return res.json({ userId: u.anonId });
+  } catch (err) {
+    console.error('POST /api/auth/login error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
 app.get('/healthz', (req, res) => {
   return res.json({ ok: true, timestamp: Date.now() });
 });
 
-// Create entry (anonymous)
-app.post('/api/entries', async (req, res) => {
+// Simple local storage for images (dev only)
+const upload = multer({ dest: 'uploads/' });
+
+// Create entry (anonymous). Supports JSON or multipart (image)
+app.post('/api/entries', upload.single('image'), async (req, res) => {
   try {
     var userIdHeader = req.header('x-user-id');
     var authorId = typeof userIdHeader === 'string' ? userIdHeader.trim() : null;
-    var errCode = validateEntryBody(req.body);
+    var body = req.body || {};
+    var errCode = validateEntryBody(body);
     if (errCode) return res.status(400).json({ error: errCode });
-    const content = req.body.content.trim();
-    const entry = await Entry.create({ content: content, authorId: authorId || null });
-    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId });
+    const content = body.content.trim();
+    const emotion = (body.emotion || '').toString().trim() || null;
+    let imageUrl = null;
+    if (req.file) {
+      imageUrl = `/uploads/${req.file.filename}`;
+    } else if (body.imageUrl) {
+      imageUrl = body.imageUrl;
+    }
+    const entry = await Entry.create({ content: content, authorId: authorId || null, emotion: emotion, imageUrl: imageUrl });
+    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId, emotion: entry.emotion, imageUrl: entry.imageUrl });
   } catch (err) {
     console.error('POST /api/entries error:', err);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
@@ -121,8 +186,7 @@ app.get('/api/entries', async (req, res) => {
     // Random feed
     const sampled = await Entry.aggregate([
       { $sample: { size: limit } },
-      // Ensure deterministic shape
-      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1 } },
+      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1 } },
     ]);
     return res.json({ mode: 'random', limit, items: sampled });
   } catch (err) {

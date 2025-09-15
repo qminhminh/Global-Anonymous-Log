@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/feed_provider.dart';
 import 'feed_screen.dart';
+import 'email_auth_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -14,6 +15,7 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _controller = PageController();
   int _index = 0;
+  bool _loadingAnon = false;
 
   @override
   Widget build(BuildContext context) {
@@ -73,19 +75,50 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 16),
                 SizedBox(
-                  width: double.infinity,
+                  width: 720,
                   child: ElevatedButton(
-                    onPressed: () async {
-                      final auth = context.read<AuthProvider>();
-                      final id = await auth.signInAnonymous();
-                      if (id != null && mounted) {
-                        context.read<FeedProvider>().setUserId(id);
-                        Navigator.of(context).pushReplacement(
-                          MaterialPageRoute(builder: (_) => const FeedScreen()),
-                        );
-                      }
+                    onPressed: _loadingAnon
+                        ? null
+                        : () async {
+                            setState(() => _loadingAnon = true);
+                            final auth = context.read<AuthProvider>();
+                            final id = await auth.signInAnonymous();
+                            if (!mounted) return;
+                            setState(() => _loadingAnon = false);
+                            if (id != null) {
+                              context.read<FeedProvider>().setUserId(id);
+                              Navigator.of(context).pushReplacement(
+                                MaterialPageRoute(builder: (_) => const FeedScreen()),
+                              );
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Cannot continue anonymously. Check server URL or use --dart-define=API_BASE_URL',
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                    child: _loadingAnon
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Continue anonymously'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: 720,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const EmailAuthScreen()),
+                      );
                     },
-                    child: const Text('Continue anonymously'),
+                    child: const Text('Continue with Email'),
                   ),
                 ),
               ],

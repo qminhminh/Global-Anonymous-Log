@@ -133,13 +133,14 @@ class _FeedList extends StatelessWidget {
         if (feed.entries.isEmpty) {
           return const Center(child: Text('No posts yet. Be the first!'));
         }
-        return ListView.separated(
+        // Responsive center column on wide screens
+        final list = ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
           itemCount: feed.entries.length,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
             final e = feed.entries[index];
-            return Card(
+            final card = Card(
               elevation: 0,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               child: Padding(
@@ -182,8 +183,17 @@ class _FeedList extends StatelessWidget {
                 ),
               ),
             );
+            final maxWidth = 720.0;
+            return Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: card,
+              ),
+            );
           },
         );
+        return list;
       },
     );
   }
