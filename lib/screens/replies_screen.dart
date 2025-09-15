@@ -35,7 +35,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Trả lời ẩn danh'),
+        title: const Text('Anonymous replies'),
       ),
       body: Column(
         children: [
@@ -44,7 +44,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Bài viết', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text('Post', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 Text(widget.entry.content),
               ],
@@ -55,7 +55,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : (_replies.isEmpty
-                    ? const Center(child: Text('Chưa có trả lời nào'))
+                    ? const Center(child: Text('No replies yet'))
                     : ListView.separated(
                         padding: const EdgeInsets.all(12),
                         itemCount: _replies.length,
@@ -79,7 +79,7 @@ class _RepliesScreenState extends State<RepliesScreen> {
                   Expanded(
                     child: TextField(
                       controller: _controller,
-                      decoration: const InputDecoration(hintText: 'Viết trả lời ẩn danh...'),
+                      decoration: const InputDecoration(hintText: 'Write an anonymous reply...'),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -107,9 +107,9 @@ class _RepliesScreenState extends State<RepliesScreen> {
   String _formatTime(DateTime dt) {
     final now = DateTime.now();
     final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return 'vừa xong';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} phút';
-    if (diff.inHours < 24) return '${diff.inHours} giờ';
-    return '${diff.inDays} ngày';
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min';
+    if (diff.inHours < 24) return '${diff.inHours} h';
+    return '${diff.inDays} d';
   }
 }

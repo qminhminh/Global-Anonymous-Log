@@ -16,7 +16,7 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'x-user-id'] }));
 app.use(helmet());
 app.use(express.json({ limit: '16kb' }));
 app.use(morgan('dev'));
@@ -37,6 +37,7 @@ const entrySchema = new mongoose.Schema(
     content: { type: String, required: true, trim: true, maxlength: 2000 },
     hearts: { type: Number, default: 0 },
     repliesCount: { type: Number, default: 0 },
+    authorId: { type: String, default: null, index: true },
   },
   { timestamps: true }
 );
@@ -45,6 +46,7 @@ const replySchema = new mongoose.Schema(
   {
     entryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Entry', required: true, index: true },
     content: { type: String, required: true, trim: true, maxlength: 1000 },
+    authorId: { type: String, default: null, index: true },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );
@@ -70,6 +72,15 @@ function validateReplyBody(body) {
 }
 
 // ----- Routes -----
+// Anonymous auth issue userId
+app.post('/api/auth/anonymous', (req, res) => {
+  try {
+    var id = 'user_' + Math.random().toString(36).slice(2, 10);
+    return res.status(201).json({ userId: id });
+  } catch (err) {
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
 app.get('/healthz', (req, res) => {
   return res.json({ ok: true, timestamp: Date.now() });
 });
@@ -77,11 +88,13 @@ app.get('/healthz', (req, res) => {
 // Create entry (anonymous)
 app.post('/api/entries', async (req, res) => {
   try {
+    var userIdHeader = req.header('x-user-id');
+    var authorId = typeof userIdHeader === 'string' ? userIdHeader.trim() : null;
     var errCode = validateEntryBody(req.body);
     if (errCode) return res.status(400).json({ error: errCode });
     const content = req.body.content.trim();
-    const entry = await Entry.create({ content: content });
-    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt });
+    const entry = await Entry.create({ content: content, authorId: authorId || null });
+    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId });
   } catch (err) {
     console.error('POST /api/entries error:', err);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
@@ -137,15 +150,17 @@ app.post('/api/entries/:id/replies', async (req, res) => {
   try {
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'INVALID_ID' });
+    var userIdHeader = req.header('x-user-id');
+    var authorId = typeof userIdHeader === 'string' ? userIdHeader.trim() : null;
     var errCode = validateReplyBody(req.body);
     if (errCode) return res.status(400).json({ error: errCode });
     const content = req.body.content.trim();
     const entry = await Entry.findById(id).select('_id');
     if (!entry) return res.status(404).json({ error: 'NOT_FOUND' });
 
-    const reply = await Reply.create({ entryId: entry._id, content });
+    const reply = await Reply.create({ entryId: entry._id, content, authorId: authorId || null });
     await Entry.updateOne({ _id: entry._id }, { $inc: { repliesCount: 1 } });
-    return res.status(201).json({ id: reply._id, entryId: reply.entryId, content: reply.content, createdAt: reply.createdAt });
+    return res.status(201).json({ id: reply._id, entryId: reply.entryId, content: reply.content, createdAt: reply.createdAt, authorId: reply.authorId });
   } catch (err) {
     console.error('POST /api/entries/:id/replies error:', err);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });

@@ -37,7 +37,7 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Global Anonymous Log'),
+        title: const Text('AnonDiary'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -87,21 +87,21 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('Chia sẻ tâm sự của bạn (ẩn danh)', style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text('Share your feelings (anonymous)', style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               TextField(
                 controller: controller,
                 maxLines: 5,
                 minLines: 3,
                 decoration: const InputDecoration(
-                  hintText: 'Viết gì đó... (tối đa ~2000 ký tự)',
+                  hintText: 'Write something... (max ~2000 chars)',
                   filled: true,
                 ),
               ),
               const SizedBox(height: 12),
               ElevatedButton.icon(
                 icon: const Icon(Icons.send),
-                label: const Text('Đăng ẩn danh'),
+                label: const Text('Post anonymously'),
                 onPressed: () async {
                   final text = controller.text.trim();
                   if (text.isEmpty) return;
@@ -128,10 +128,10 @@ class _FeedList extends StatelessWidget {
           return const Center(child: CircularProgressIndicator());
         }
         if (feed.error != null) {
-          return Center(child: Text('Lỗi: ${feed.error}'));
+          return Center(child: Text('Error: ${feed.error}'));
         }
         if (feed.entries.isEmpty) {
-          return const Center(child: Text('Chưa có bài viết nào. Hãy là người đầu tiên!'));
+          return const Center(child: Text('No posts yet. Be the first!'));
         }
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
@@ -191,10 +191,10 @@ class _FeedList extends StatelessWidget {
   String _formatTime(DateTime dt) {
     final now = DateTime.now();
     final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return 'vừa xong';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} phút';
-    if (diff.inHours < 24) return '${diff.inHours} giờ';
-    return '${diff.inDays} ngày';
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min';
+    if (diff.inHours < 24) return '${diff.inHours} h';
+    return '${diff.inDays} d';
   }
 }
 

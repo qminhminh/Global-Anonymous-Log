@@ -53,14 +53,11 @@ class ReplyModel {
 }
 
 class FeedProvider extends ChangeNotifier {
-  // Ghi chú: đổi BASE_URL nếu deploy server
   static final String baseUrl = _resolveBaseUrl();
 
   static String _resolveBaseUrl() {
-    // Ưu tiên --dart-define=API_BASE_URL=http://<host>:3000
     const env = String.fromEnvironment('API_BASE_URL');
     if (env.isNotEmpty) return env;
-    // Mặc định: Android emulator -> 10.0.2.2, iOS simulator -> localhost
     if (Platform.isAndroid) return 'http://10.0.2.2:3000';
     return 'http://localhost:3000';
   }
@@ -68,10 +65,17 @@ class FeedProvider extends ChangeNotifier {
   final List<EntryModel> _entries = <EntryModel>[];
   bool _loading = false;
   String? _error;
+  String? _userId;
 
   List<EntryModel> get entries => List.unmodifiable(_entries);
   bool get loading => _loading;
   String? get error => _error;
+  String? get userId => _userId;
+
+  void setUserId(String? id) {
+    _userId = id;
+    notifyListeners();
+  }
 
   Future<void> fetchFeed({String mode = 'random', int limit = 20}) async {
     _loading = true;
@@ -98,12 +102,18 @@ class FeedProvider extends ChangeNotifier {
     }
   }
 
+  Map<String, String> _authHeaders() {
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (_userId != null && _userId!.isNotEmpty) headers['x-user-id'] = _userId!;
+    return headers;
+  }
+
   Future<bool> createEntry(String content) async {
     try {
       final uri = Uri.parse('$baseUrl/api/entries');
       final resp = await http.post(
         uri,
-        headers: {'Content-Type': 'application/json'},
+        headers: _authHeaders(),
         body: json.encode({'content': content}),
       );
       if (resp.statusCode == 201) {
@@ -140,7 +150,7 @@ class FeedProvider extends ChangeNotifier {
       final uri = Uri.parse('$baseUrl/api/entries/$entryId/replies');
       final resp = await http.post(
         uri,
-        headers: {'Content-Type': 'application/json'},
+        headers: _authHeaders(),
         body: json.encode({'content': content}),
       );
       if (resp.statusCode == 201) {
