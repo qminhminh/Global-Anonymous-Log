@@ -12,6 +12,7 @@ class EntryModel {
   final String? imageUrl;
   final String? authorId;
   final DateTime? diaryDate;
+  final String? repostOf;
   Map<String, int> reactionsCounts;
 
   EntryModel({
@@ -24,6 +25,7 @@ class EntryModel {
     this.imageUrl,
     this.authorId,
     this.diaryDate,
+    this.repostOf,
     Map<String, int>? reactionsCounts,
   }) : reactionsCounts = reactionsCounts ?? <String, int>{};
 
@@ -38,6 +40,7 @@ class EntryModel {
       imageUrl: map['imageUrl']?.toString(),
       authorId: map['authorId']?.toString(),
       diaryDate: DateTime.tryParse(map['diaryDate']?.toString() ?? ''),
+      repostOf: map['repostOf']?.toString(),
       reactionsCounts: (map['reactionsCounts'] as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v is int ? v : int.tryParse('$v') ?? 0)) ?? <String, int>{},
     );
   }
@@ -261,6 +264,21 @@ class FeedProvider extends ChangeNotifier {
       final resp = await http.delete(uri, headers: _authHeaders());
       if (resp.statusCode == 200) {
         _entries.removeWhere((e) => e.id == id);
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } catch (_) { return false; }
+  }
+
+  Future<bool> repostEntry(String sourceId) async {
+    try {
+      final uri = Uri.parse('$baseUrl/api/entries/$sourceId/repost');
+      final resp = await http.post(uri, headers: _authHeaders());
+      if (resp.statusCode == 201) {
+        final map = json.decode(resp.body) as Map<String, dynamic>;
+        final created = EntryModel.fromMap(map);
+        _entries.insert(0, created);
         notifyListeners();
         return true;
       }

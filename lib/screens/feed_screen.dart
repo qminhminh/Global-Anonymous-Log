@@ -382,6 +382,14 @@ class _EntryCardState extends State<_EntryCard> {
             ),
             const SizedBox(height: 8),
           ],
+          if (e.repostOf != null) ...[
+            Row(children: [
+              const Icon(Icons.repeat, size: 16, color: Colors.tealAccent),
+              const SizedBox(width: 6),
+              Text('Reposted', style: TextStyle(color: Colors.tealAccent.withOpacity(0.9))),
+            ]),
+            const SizedBox(height: 8),
+          ],
           Text(shown, style: const TextStyle(fontSize: 16, height: 1.5)),
           if (shouldTrim && !_expanded) ...[
             const SizedBox(height: 6),
@@ -397,6 +405,12 @@ class _EntryCardState extends State<_EntryCard> {
               const SizedBox(width: 12),
               _ghostIconButton(context, Icons.reply, widget.onOpenReplies),
               Text('${e.repliesCount}'),
+              const SizedBox(width: 12),
+              _ghostIconButton(context, Icons.repeat, () async {
+                final ok = await context.read<FeedProvider>().repostEntry(e.id);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Reposted' : 'Repost failed')));
+              }),
               const Spacer(),
               Text(
                 formatDateTime(e.diaryDate ?? e.createdAt),

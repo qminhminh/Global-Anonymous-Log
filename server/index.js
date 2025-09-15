@@ -53,6 +53,7 @@ const entrySchema = new mongoose.Schema(
     hearts: { type: Number, default: 0 },
     repliesCount: { type: Number, default: 0 },
     authorId: { type: String, default: null, index: true },
+    repostOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Entry', default: null, index: true },
     emotion: { type: String, default: null },
     imageUrl: { type: String, default: null },
     diaryDate: { type: Date, default: null },
@@ -232,7 +233,7 @@ app.post('/api/entries', upload.single('image'), async (req, res) => {
       imageUrl = body.imageUrl;
     }
     const entry = await Entry.create({ content: content, authorId: authorId || null, emotion: emotion, imageUrl: imageUrl, diaryDate });
-    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId, emotion: entry.emotion, imageUrl: entry.imageUrl, diaryDate: entry.diaryDate });
+    return res.status(201).json({ id: entry._id, content: entry.content, hearts: entry.hearts, repliesCount: entry.repliesCount, createdAt: entry.createdAt, authorId: entry.authorId, emotion: entry.emotion, imageUrl: entry.imageUrl, diaryDate: entry.diaryDate, repostOf: entry.repostOf, reactionsCounts: entry.reactionsCounts });
   } catch (err) {
     console.error('POST /api/entries error:', err);
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
@@ -293,6 +294,35 @@ app.delete('/api/entries/:id', async (req, res) => {
   }
 });
 
+// Repost an entry: create a new entry with same content, mark repostOf
+app.post('/api/entries/:id/repost', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: 'INVALID_ID' });
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const src = await Entry.findById(id).lean();
+    if (!src) return res.status(404).json({ error: 'NOT_FOUND' });
+    // Only allow each user to repost once in total
+    const already = await Entry.findOne({ authorId: me, repostOf: { $ne: null } }).select('_id').lean();
+    if (already) return res.status(409).json({ error: 'ALREADY_REPOSTED' });
+    // Optional: block reposting your own entry
+    if (src.authorId && src.authorId === me) return res.status(400).json({ error: 'CANNOT_REPOST_OWN' });
+    const created = await Entry.create({
+      content: src.content,
+      authorId: me,
+      emotion: src.emotion,
+      imageUrl: src.imageUrl,
+      diaryDate: src.diaryDate,
+      repostOf: id,
+    });
+    return res.status(201).json({ id: created._id, content: created.content, hearts: created.hearts, repliesCount: created.repliesCount, createdAt: created.createdAt, authorId: created.authorId, emotion: created.emotion, imageUrl: created.imageUrl, diaryDate: created.diaryDate, repostOf: created.repostOf, reactionsCounts: created.reactionsCounts });
+  } catch (err) {
+    console.error('POST /api/entries/:id/repost error:', err);
+    return res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
 // Feed entries
 // mode=random|latest; page & limit for latest; limit only for random
 app.get('/api/entries', async (req, res) => {
@@ -327,7 +357,7 @@ app.get('/api/entries', async (req, res) => {
         { $sort: { totalReactions: -1, createdAt: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
-        { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1 } },
+        { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1, authorId: 1, diaryDate: 1, repostOf: 1 } },
       ]);
       return res.json({ mode, page, limit, items });
     }
@@ -335,7 +365,7 @@ app.get('/api/entries', async (req, res) => {
     // Random feed
     const sampled = await Entry.aggregate([
       { $sample: { size: limit } },
-      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1, authorId: 1, diaryDate: 1 } },
+      { $project: { content: 1, hearts: 1, repliesCount: 1, createdAt: 1, emotion: 1, imageUrl: 1, reactionsCounts: 1, authorId: 1, diaryDate: 1, repostOf: 1 } },
     ]);
     return res.json({ mode: 'random', limit, items: sampled });
   } catch (err) {
