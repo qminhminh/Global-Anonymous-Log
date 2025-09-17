@@ -282,6 +282,7 @@ class FeedProvider extends ChangeNotifier {
         notifyListeners();
         return true;
       }
+      if (resp.statusCode == 409) { return false; }
       return false;
     } catch (_) { return false; }
   }

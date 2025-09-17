@@ -6,6 +6,10 @@ import 'providers/feed_provider.dart';
 import 'screens/feed_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/profile_screen.dart';
+import 'providers/game_provider.dart';
+import 'screens/game_lobby_screen.dart';
+import 'screens/space_arena_screen.dart';
+import 'providers/space_provider.dart';
 
 void main() {
   runApp(const MyApp());
@@ -22,6 +26,8 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()..load()),
         ChangeNotifierProvider(create: (_) => FeedProvider()),
+        ChangeNotifierProvider(create: (_) => GameProvider()),
+        ChangeNotifierProvider(create: (_) => SpaceProvider()),
       ],
       child: MaterialApp(
         title: 'AnonDiary',
@@ -49,6 +55,8 @@ class MyApp extends StatelessWidget {
         home: const _RootGate(),
         routes: {
           '/profile': (_) => const ProfileScreen(),
+          '/game': (_) => const GameLobbyScreen(),
+          '/space': (_) => const SpaceArenaScreen(),
         },
       ),
     );
@@ -74,6 +82,8 @@ class _RootGateState extends State<_RootGate> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         context.read<FeedProvider>().setUserId(id);
+        context.read<GameProvider>().setUserId(id);
+        context.read<SpaceProvider>().setUserId(id);
       });
     }
   }

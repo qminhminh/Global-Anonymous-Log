@@ -137,6 +137,34 @@ const messageSchema = new mongoose.Schema(
 );
 const Message = mongoose.model('Message', messageSchema);
 
+// ---- Game (Would You Rather) ----
+const gameRoomSchema = new mongoose.Schema(
+  {
+    code: { type: String, unique: true, index: true },
+    question: { type: String, required: true },
+    optionA: { type: String, required: true },
+    optionB: { type: String, required: true },
+    votesA: { type: Number, default: 0 },
+    votesB: { type: Number, default: 0 },
+    participants: { type: [String], default: [] },
+    userVotes: { type: Map, of: String, default: {} }, // userId -> 'A' | 'B'
+    createdBy: { type: String, index: true },
+  },
+  { timestamps: true }
+);
+const GameRoom = mongoose.model('GameRoom', gameRoomSchema);
+
+// Space scores
+const spaceScoreSchema = new mongoose.Schema(
+  {
+    userId: { type: String, index: true },
+    score: { type: Number, default: 0 },
+  },
+  { timestamps: true }
+);
+spaceScoreSchema.index({ userId: 1, score: -1 });
+const SpaceScore = mongoose.model('SpaceScore', spaceScoreSchema);
+
 // ----- Validation helpers (Node 12 friendly) -----
 function validateEntryBody(body) {
   if (!body || typeof body.content !== 'string') return 'INVALID_BODY';
@@ -552,6 +580,91 @@ app.get('/api/profile/me', async (req, res) => {
       themeColor: user && user.themeColor,
     });
   } catch (err) { console.error('GET /profile/me error', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// ---- Game APIs ----
+function randomCode() { return Math.random().toString(36).slice(2, 8).toUpperCase(); }
+
+app.post('/api/game/create', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const q = (req.body && req.body.question ? String(req.body.question) : '').trim();
+    const a = (req.body && req.body.optionA ? String(req.body.optionA) : '').trim();
+    const b = (req.body && req.body.optionB ? String(req.body.optionB) : '').trim();
+    if (!q || !a || !b) return res.status(400).json({ error: 'INVALID' });
+    let code = randomCode();
+    for (let i = 0; i < 5; i++) { // avoid collision
+      const exists = await GameRoom.findOne({ code }).select('_id').lean();
+      if (!exists) break; code = randomCode();
+    }
+    const room = await GameRoom.create({ code, question: q, optionA: a, optionB: b, createdBy: me, participants: [me] });
+    return res.status(201).json({ code: room.code });
+  } catch (err) { console.error('POST /api/game/create', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.post('/api/game/join/:code', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const code = req.params.code.toUpperCase();
+    const room = await GameRoom.findOneAndUpdate({ code }, { $addToSet: { participants: me } }, { new: true });
+    if (!room) return res.status(404).json({ error: 'NOT_FOUND' });
+    return res.json({ code: room.code });
+  } catch (err) { console.error('POST /api/game/join', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.post('/api/game/vote/:code', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const code = req.params.code.toUpperCase();
+    const choice = (req.body && req.body.choice ? String(req.body.choice) : '').toUpperCase();
+    if (choice !== 'A' && choice !== 'B') return res.status(400).json({ error: 'INVALID' });
+    const room = await GameRoom.findOne({ code });
+    if (!room) return res.status(404).json({ error: 'NOT_FOUND' });
+    const prev = room.userVotes.get(me);
+    if (prev === 'A') room.votesA = Math.max(0, room.votesA - 1);
+    if (prev === 'B') room.votesB = Math.max(0, room.votesB - 1);
+    room.userVotes.set(me, choice);
+    if (choice === 'A') room.votesA += 1; else room.votesB += 1;
+    await room.save();
+    return res.json({ code: room.code, votesA: room.votesA, votesB: room.votesB });
+  } catch (err) { console.error('POST /api/game/vote', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.get('/api/game/room/:code', async (req, res) => {
+  try {
+    const code = req.params.code.toUpperCase();
+    const room = await GameRoom.findOne({ code }).lean();
+    if (!room) return res.status(404).json({ error: 'NOT_FOUND' });
+    return res.json({ code: room.code, question: room.question, optionA: room.optionA, optionB: room.optionB, votesA: room.votesA, votesB: room.votesB, participants: room.participants.length });
+  } catch (err) { console.error('GET /api/game/room', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+// ---- Space score APIs ----
+app.post('/api/space/score', async (req, res) => {
+  try {
+    const me = (req.header('x-user-id') || '').toString().trim();
+    if (!me) return res.status(401).json({ error: 'NO_USER' });
+    const n = Number(req.body && req.body.score);
+    const score = isNaN(n) ? 0 : Math.max(0, Math.floor(n));
+    await SpaceScore.create({ userId: me, score });
+    return res.status(201).json({ ok: true });
+  } catch (err) { console.error('POST /api/space/score', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
+});
+
+app.get('/api/space/leaderboard', async (req, res) => {
+  try {
+    const items = await SpaceScore.aggregate([
+      { $sort: { score: -1, createdAt: 1 } },
+      { $group: { _id: '$userId', best: { $first: '$score' } } },
+      { $project: { _id: 0, userId: '$_id', best: 1 } },
+      { $sort: { best: -1 } },
+      { $limit: 50 },
+    ]);
+    return res.json({ items });
+  } catch (err) { console.error('GET /api/space/leaderboard', err); return res.status(500).json({ error: 'INTERNAL_ERROR' }); }
 });
 
 app.post('/api/profile/me', async (req, res) => {

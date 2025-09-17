@@ -44,6 +44,16 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
             icon: const Icon(Icons.person),
             onPressed: () => Navigator.of(context).pushNamed('/profile'),
           ),
+          IconButton(
+            icon: const Icon(Icons.videogame_asset_outlined),
+            tooltip: 'Game',
+            onPressed: () => Navigator.of(context).pushNamed('/game'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.rocket_launch_outlined),
+            tooltip: 'Space Arena',
+            onPressed: () => Navigator.of(context).pushNamed('/space'),
+          ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.filter_list),
             onSelected: (m) {
